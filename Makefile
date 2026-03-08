@@ -1,4 +1,5 @@
-.PHONY: help build up up-detach down restart logs logs-app shell \
+.PHONY: help build up up-detach down restart logs logs-app logs-worker shell \
+        worker-shell worker-inspect worker-purge \
         test test-cov migrate migrate-auto migrate-down migrate-history \
         format lint minio-setup setup clean lock sync
 
@@ -14,7 +15,11 @@ help:
 	@echo "    make restart       Restart all services"
 	@echo "    make logs          Tail all service logs"
 	@echo "    make logs-app      Tail app logs only"
+	@echo "    make logs-worker   Tail celery worker logs"
 	@echo "    make shell         Open shell in app container"
+	@echo "    make worker-shell  Open shell in celery worker container"
+	@echo "    make worker-inspect  Inspect active celery tasks"
+	@echo "    make worker-purge  Purge all pending celery tasks"
 	@echo ""
 	@echo "  Dependencies (uv)"
 	@echo "    make lock          Generate/update uv.lock"
@@ -63,8 +68,20 @@ logs:
 logs-app:
 	docker compose logs -f app
 
+logs-worker:
+	docker compose logs -f celery_worker
+
 shell:
 	docker compose exec app /bin/bash
+
+worker-shell:
+	docker compose exec celery_worker /bin/bash
+
+worker-inspect:
+	docker compose exec celery_worker celery -A worker.celery_app inspect active
+
+worker-purge:
+	docker compose exec celery_worker celery -A worker.celery_app purge -f
 
 # ── Dependencies (uv) ─────────────────────────────────────────────────────────
 
@@ -104,10 +121,10 @@ test-cov:
 # ── Code quality ──────────────────────────────────────────────────────────────
 
 format:
-	uv run ruff format app/ tests/
+	uv run ruff format app/ worker/ tests/
 
 lint:
-	uv run ruff check app/ tests/
+	uv run ruff check app/ worker/ tests/
 
 # ── MinIO ─────────────────────────────────────────────────────────────────────
 

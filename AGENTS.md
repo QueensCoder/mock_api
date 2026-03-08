@@ -15,7 +15,9 @@ Package management is handled by **uv**.
 | ORM | SQLAlchemy 2.x (async) |
 | Validation | Pydantic v2 |
 | Database | PostgreSQL 16 via asyncpg |
-| Cache | Redis 7 |
+| Auth | Clerk (JWT via JWKS) |
+| Cache / broker | Redis 7 |
+| Task queue | Celery 5 |
 | Object storage | MinIO (S3-compatible, boto3) |
 | Migrations | Alembic |
 | Package manager | uv |
@@ -34,6 +36,11 @@ app/
   services/    # Business logic, redis client, S3 storage helpers
   utils/       # Pure helper functions with no side effects
 migrations/    # Alembic migration scripts
+worker/        # Celery worker (separate container, own Dockerfile)
+  celery_app.py  # Celery instance — autodiscovers worker/tasks/
+  config.py      # Celery broker/backend settings (reads from app.core.config)
+  tasks/         # One file per task group (e.g. email.py, reports.py)
+  Dockerfile     # Worker image (built from repo root context)
 tests/
   unit/        # Pure unit tests — no DB or external services
   integration/ # Tests that require running services (use conftest.py fixtures)
@@ -58,6 +65,52 @@ tests/
 5. Register the router in `app/api/v1/router.py`.
 6. Run `make migrate-auto MSG="add your_model table"` to generate the migration.
 7. Run `make migrate` to apply it.
+
+## Authentication (Clerk)
+
+Auth is handled externally by Clerk on the TypeScript client. The backend only verifies JWTs.
+
+**Flow:**
+1. Client completes OAuth/SSO via Clerk → receives a session token.
+2. Client sends `Authorization: Bearer <session_token>` on every API request.
+3. Backend fetches Clerk's JWKS (cached 1 hour), verifies the RS256 JWT.
+
+**Key files:**
+- `app/core/auth.py` — JWKS fetching + JWT verification logic
+- `app/schemas/auth.py` — `ClerkUser` Pydantic model (decoded token claims)
+- `app/api/deps.py` — `get_current_user` and `require_org_role` FastAPI dependencies
+
+**Protecting a route:**
+```python
+from app.api.deps import get_current_user, require_org_role
+from app.schemas.auth import ClerkUser
+
+# Require any authenticated user
+@router.get("/protected")
+async def protected(user: ClerkUser = Depends(get_current_user)):
+    ...
+
+# Require a specific org role
+@router.delete("/admin-only", dependencies=[Depends(require_org_role("org:admin"))])
+async def admin_only():
+    ...
+```
+
+**Required env vars:**
+- `CLERK_JWKS_URL` — from Clerk Dashboard → API Keys → Advanced → JWKS URL
+- `CLERK_ISSUER` — your Clerk Frontend API URL (skip issuer check locally by leaving empty)
+
+## Adding a Celery Task
+
+1. Create (or add to) a file in `worker/tasks/` — e.g. `worker/tasks/email.py`.
+2. Decorate with `@celery.task(bind=True, name="group.action")`.
+3. Celery autodiscovers all modules listed in `celery.autodiscover_tasks(["worker.tasks"])`.
+4. Call from the API with `.delay()` or `.apply_async()`:
+   ```python
+   from worker.tasks.email import send_email
+   send_email.delay(to="user@example.com", subject="Hi", body="...")
+   ```
+5. Monitor via `make worker-inspect` or the Flower UI (add `flower` service if needed).
 
 ## Database Migrations
 
@@ -92,5 +145,9 @@ make test           # run test suite
 make lint           # ruff lint check
 make format         # ruff auto-format
 make logs-app       # tail app container logs
+make logs-worker    # tail celery worker logs
 make shell          # open shell inside the app container
+make worker-shell   # open shell inside the celery worker container
+make worker-inspect # show active celery tasks
+make worker-purge   # purge all pending tasks from the queue
 ```
