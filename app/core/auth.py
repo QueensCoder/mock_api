@@ -1,84 +1,100 @@
 import logging
-import time
-from typing import Any
+from functools import lru_cache
 
-import httpx
-from jose import JWTError, jwt
-from jose.exceptions import ExpiredSignatureError
+from stytch import Client
+from stytch.core.response_base import StytchError
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Simple in-memory JWKS cache — refreshed every hour or on unknown kid
-_jwks_cache: dict[str, Any] = {"keys": [], "fetched_at": 0.0}
-_JWKS_TTL = 3600  # seconds
+
+# ── Exceptions ────────────────────────────────────────────────────────────────
 
 
-async def _fetch_jwks(force: bool = False) -> list[dict]:
-    now = time.monotonic()
-    if not force and _jwks_cache["keys"] and now - _jwks_cache["fetched_at"] < _JWKS_TTL:
-        return _jwks_cache["keys"]
-
-    if not settings.CLERK_JWKS_URL:
-        raise RuntimeError("CLERK_JWKS_URL is not configured")
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(settings.CLERK_JWKS_URL)
-        resp.raise_for_status()
-        keys = resp.json().get("keys", [])
-
-    _jwks_cache["keys"] = keys
-    _jwks_cache["fetched_at"] = now
-    logger.debug("JWKS refreshed — %d key(s) loaded", len(keys))
-    return keys
+class AuthError(Exception):
+    """Base authentication error."""
 
 
-def _find_key(keys: list[dict], kid: str) -> dict | None:
-    return next((k for k in keys if k.get("kid") == kid), None)
+class TokenExpiredError(AuthError):
+    """Session has expired — client should call stytch.session.getTokens() and retry."""
 
 
-async def verify_clerk_token(token: str) -> dict:
+class TokenInvalidError(AuthError):
+    """Session is invalid or not found — client should redirect to login."""
+
+
+# ── Stytch client ─────────────────────────────────────────────────────────────
+
+# Stytch error_type values that mean the session is permanently gone (re-login required)
+_INVALID_SESSION_TYPES = frozenset(
+    {
+        "session_not_found",
+        "session_revoked",
+        "invalid_session_token",
+        "unauthorized_credentials",
+    }
+)
+
+
+@lru_cache(maxsize=1)
+def get_stytch_client() -> Client:
     """
-    Verify a Clerk session JWT and return its decoded payload.
+    Singleton Stytch client.  Cached after first call.
 
-    Raises ValueError on any verification failure so callers can map it
-    to an HTTP 401 without leaking internal details.
+    Override via FastAPI dependency_overrides in tests:
+        app.dependency_overrides[get_stytch_client] = lambda: mock_client
+    """
+    return Client(
+        project_id=settings.STYTCH_PROJECT_ID,
+        secret=settings.STYTCH_SECRET,
+        suppress_warnings=True,
+    )
+
+
+# ── Session verification ──────────────────────────────────────────────────────
+
+
+async def verify_stytch_session(session_token: str, client: Client) -> dict:
+    """
+    Authenticate a Stytch session token and return a normalised user dict.
+
+    Raises:
+        TokenExpiredError:  session is expired — client should refresh and retry.
+        TokenInvalidError:  token is invalid / session gone — client must re-login.
     """
     try:
-        header = jwt.get_unverified_header(token)
-    except JWTError as exc:
-        raise ValueError("Malformed token") from exc
+        resp = await client.sessions.authenticate_async(session_token=session_token)
+    except StytchError as exc:
+        error_type: str = exc.details.error_type or ""
+        if error_type in _INVALID_SESSION_TYPES:
+            raise TokenInvalidError(f"Session invalid: {error_type}") from exc
+        raise TokenExpiredError(f"Session expired: {error_type}") from exc
+    except Exception as exc:
+        raise TokenInvalidError("Session authentication failed") from exc
 
-    kid = header.get("kid")
-    if not kid:
-        raise ValueError("Token header missing kid")
+    return _map_response(resp)
 
-    keys = await _fetch_jwks()
-    key = _find_key(keys, kid)
 
-    if key is None:
-        # Key not in cache — possible rotation; refresh once and retry
-        keys = await _fetch_jwks(force=True)
-        key = _find_key(keys, kid)
+def _map_response(resp) -> dict:
+    """Flatten a Stytch AuthenticateResponse into a plain dict."""
+    user = resp.user
+    session = resp.session
 
-    if key is None:
-        raise ValueError("No matching public key found for token")
+    emails = user.emails or []
+    primary_email = emails[0].email if emails else None
 
-    decode_options: dict[str, Any] = {"verify_aud": False}
-    issuer = settings.CLERK_ISSUER or None
+    name = user.name
+    first_name = (getattr(name, "first_name", None) or "") or None
+    last_name = (getattr(name, "last_name", None) or "") or None
 
-    try:
-        payload: dict = jwt.decode(
-            token,
-            key,
-            algorithms=["RS256"],
-            options=decode_options,
-            issuer=issuer,
-        )
-    except ExpiredSignatureError as exc:
-        raise ValueError("Token has expired") from exc
-    except JWTError as exc:
-        raise ValueError(f"Token verification failed: {exc}") from exc
-
-    return payload
+    return {
+        "user_id": user.user_id,
+        "session_id": session.session_id,
+        "email": primary_email,
+        "first_name": first_name,
+        "last_name": last_name,
+        "session_expires_at": session.expires_at,
+        "session_token": resp.session_token,
+        "session_jwt": resp.session_jwt,
+    }

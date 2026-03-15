@@ -1,47 +1,60 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from stytch import Client
 
-from app.core.auth import verify_clerk_token
-from app.schemas.auth import ClerkUser
+from app.core.auth import AuthError, TokenExpiredError, get_stytch_client, verify_stytch_session
+from app.schemas.auth import StytchUser
 
 _bearer = HTTPBearer(auto_error=True)
 
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-) -> ClerkUser:
+    stytch: Client = Depends(get_stytch_client),
+) -> StytchUser:
     """
-    Resolve and verify the Clerk session JWT from the Authorization header.
+    Verify the Stytch session token from the Authorization header.
 
-    The TypeScript client should attach the token as:
-        Authorization: Bearer <clerk_session_token>
+    The TypeScript client sends:
+        Authorization: Bearer <stytch_session_token>
 
-    Raises 401 if the token is missing, expired, or invalid.
+    On success — returns a populated StytchUser.
+
+    On failure — returns a structured 401 the client can act on:
+        code=TOKEN_EXPIRED  → call stytch.session.getTokens() then retry
+        code=TOKEN_INVALID  → session is gone, redirect to login
     """
     try:
-        payload = await verify_clerk_token(credentials.credentials)
-        return ClerkUser.model_validate(payload)
-    except ValueError as exc:
+        data = await verify_stytch_session(credentials.credentials, stytch)
+        return StytchUser(**data)
+    except TokenExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
+            detail={"code": "TOKEN_EXPIRED", "message": str(exc)},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except AuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "TOKEN_INVALID", "message": str(exc)},
             headers={"WWW-Authenticate": "Bearer"},
         )
 
 
 def require_org_role(*roles: str):
     """
-    Factory dependency that enforces a minimum Clerk org role.
+    Factory dependency that gates access by org role.
 
     Usage:
-        @router.get("/admin", dependencies=[Depends(require_org_role("org:admin"))])
+        @router.delete("/resource", dependencies=[Depends(require_org_role("admin"))])
     """
 
-    async def _check(user: ClerkUser = Depends(get_current_user)) -> ClerkUser:
-        if user.org_role not in roles:
+    async def _check(user: StytchUser = Depends(get_current_user)) -> StytchUser:
+        user_role = getattr(user, "org_role", None)
+        if user_role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient organisation role",
+                detail={"code": "INSUFFICIENT_ROLE", "message": "Insufficient role"},
             )
         return user
 

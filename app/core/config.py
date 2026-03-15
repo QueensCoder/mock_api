@@ -27,13 +27,11 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: str = "app-bucket"
     S3_REGION: str = "us-east-1"
 
-    # Clerk
-    # CLERK_JWKS_URL: found in Clerk dashboard → API Keys → Advanced
-    # Format: https://<your-clerk-frontend-api>/.well-known/jwks.json
-    CLERK_JWKS_URL: str = ""
-    # CLERK_ISSUER: your Clerk frontend API URL (e.g. https://clerk.your-app.com)
-    # Leave empty to skip issuer validation during local development
-    CLERK_ISSUER: str = ""
+    # Stytch — https://stytch.com/dashboard/api-keys
+    # Use "project-test-..." / "secret-test-..." for local/dev
+    # Use "project-live-..." / "secret-live-..." for production
+    STYTCH_PROJECT_ID: str = ""
+    STYTCH_SECRET: str = ""
 
 
 settings = Settings()

@@ -1,38 +1,23 @@
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime
+
+from pydantic import BaseModel
 
 
-class ClerkUser(BaseModel):
+class StytchUser(BaseModel):
     """
-    Decoded claims from a Clerk session JWT.
-
-    Standard claims: https://clerk.com/docs/backend-requests/handling/manual-jwt
+    Normalised user model built from a Stytch session authenticate response.
     """
 
-    model_config = ConfigDict(populate_by_name=True)
-
-    # Clerk user ID (format: user_xxxxxxxxxxxxxxxx)
-    sub: str
-
-    # Session ID (format: sess_xxxxxxxxxxxxxxxx)
-    session_id: str | None = Field(None, alias="sid")
-
-    # OAuth / profile fields — present when Clerk includes them in the token
+    user_id: str
+    session_id: str
     email: str | None = None
-    email_verified: bool | None = None
     first_name: str | None = None
     last_name: str | None = None
-    image_url: str | None = None
-    username: str | None = None
+    session_expires_at: datetime | None = None
 
-    # Org-level claims (present when using Clerk Organizations)
-    org_id: str | None = None
-    org_role: str | None = None
-    org_slug: str | None = None
-
-    @property
-    def user_id(self) -> str:
-        """Alias for sub — the Clerk user ID."""
-        return self.sub
+    # Refreshed tokens returned by Stytch on every authenticate call
+    session_token: str | None = None
+    session_jwt: str | None = None
 
     @property
     def full_name(self) -> str | None:
