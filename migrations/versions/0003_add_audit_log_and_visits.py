@@ -52,8 +52,7 @@ def upgrade() -> None:
             id          BIGINT GENERATED ALWAYS AS IDENTITY,
             table_name  VARCHAR(100)              NOT NULL,
             row_id      BIGINT                    NOT NULL,
-            operation   VARCHAR(10)               NOT NULL
-                            CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE')),
+            operation   VARCHAR(10)               NOT NULL,
             old_data    JSONB,
             new_data    JSONB,
             changed_by  BIGINT,
@@ -87,8 +86,7 @@ def upgrade() -> None:
             visited_at  TIMESTAMPTZ               NOT NULL,
             reason      VARCHAR(500),
             notes       TEXT,
-            status      VARCHAR(50)               NOT NULL DEFAULT 'scheduled'
-                            CHECK (status IN ('scheduled','completed','cancelled','no_show')),
+            status      VARCHAR(50)               NOT NULL DEFAULT 'scheduled',
             created_at  TIMESTAMPTZ               NOT NULL DEFAULT now(),
             updated_at  TIMESTAMPTZ               NOT NULL DEFAULT now(),
             deleted_at  TIMESTAMPTZ,
