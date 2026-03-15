@@ -212,10 +212,7 @@ minio-setup:
 setup:
 	@test -f .env || (cp .env.example .env && echo ".env created — update values before running in production")
 	$(MAKE) build
-	$(MAKE) up-detach
-	@echo "Waiting for services to be healthy..."
-	@sleep 8
-	$(MAKE) migrate
+	$(MAKE) up
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
