@@ -34,7 +34,15 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # Detect column type changes (e.g. String(50) → String(100))
+        compare_type=True,
+        # Surface server_default differences — always review the output since
+        # Alembic compares rendered strings, not semantic equivalence
+        compare_server_default=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
