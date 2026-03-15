@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
 from app.schemas.auth import StytchUser
+from app.schemas.users import VerifyResponse
 
 router = APIRouter()
 
 
-@router.get("/verify")
-async def verify_session(user: StytchUser = Depends(get_current_user)) -> dict:
+@router.get("/verify", response_model=VerifyResponse)
+async def verify_session(user: StytchUser = Depends(get_current_user)):
     """
     Validate the caller's Stytch session token and return session metadata.
 
