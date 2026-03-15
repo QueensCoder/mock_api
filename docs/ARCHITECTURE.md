@@ -319,89 +319,46 @@ ETL is the right tool for syncing current state to a data warehouse. It is the w
 
 ```
 Postgres Primary (source of truth)
+        │ WAL / logical replication slot (wal_level = logical)
+        │ Reads WAL that is already written — near-zero CPU overhead
+        ├──► Redpanda Connect  ◄── single Go container, YAML pipeline
+        │         │
+        │         ├──► Redis Streams
+        │         │         │
+        │         │         ▼
+        │         │    Celery Worker ──► Redis Stack (search index)
+        │         │
+        │         └──► S3 / MinIO (batched JSON)
+        │                   │
+        │                   ▼ Snowpipe auto-ingest
+        │              Snowflake audit_log table (append-only)
         │
-        ├──► Read Replica (dedicated infra — analytics, app reads)
-        │         DO NOT connect CDC to this replica.
-        │         It is dedicated infrastructure with its own workload.
-        │
-        └──► CDC Replica (dedicated, db.r6g.large minimum)
-                  │ WAL / logical replication (wal_level = logical)
-                  │ One replication slot — zero impact on primary or read replica
-                  ▼
-          Redpanda Connect  ◄── single Go container, YAML pipeline
-                  │
-                  ├──► Redis Streams
-                  │         │
-                  │         ▼
-                  │    Celery Worker ──► Redis Stack (search index)
-                  │
-                  └──► S3 / MinIO (batched JSON)
-                            │
-                            ▼ Snowpipe auto-ingest
-                       Snowflake audit_log table (append-only)
+        └──► Read Replica (dedicated infra — analytics, app reads)
+                  No replication slot here. This replica is untouched.
 ```
 
+**Why the slot lives on the primary, not the read replica**
+
+The existing read replica is dedicated infrastructure with its own query workload and SLAs. Adding a logical replication slot to it would create contention and violate that contract.
+
+The primary is the right source for CDC:
+- WAL is already generated there — Redpanda Connect reads bytes that exist regardless
+- CPU impact is near-zero: WAL streaming bypasses the query engine entirely
+- This is the standard approach — it is what Debezium and Redpanda Connect docs default to
+
+**The one real risk: WAL accumulation if the consumer lags.** Fully mitigated (see Section 7).
+
 **Why this works**
-- The existing read replica is dedicated infrastructure — it must not be burdened with CDC
-- CDC runs against its own replica: primary workload is completely unaffected
-- One replication slot on the CDC replica, one consumer, two destinations
+- One replication slot on the primary, one consumer, two destinations
 - Redis search and Snowflake audit are fully decoupled from the application
+- Read replica is completely untouched — no slot, no extra load
 - Adding a new table to the pipeline is a YAML config change — no application code
 - Locally: MinIO replaces S3, DuckDB replaces Snowflake for query validation
 - Fails independently — Redis being down does not affect Snowflake ingestion and vice versa
 
----
+**When to add a dedicated CDC replica instead**
 
-## 5a. CDC Replica Sizing
-
-### Why the existing read replica must not be used
-
-The current read replica is dedicated infrastructure with its own traffic (analytics queries, reporting, read-scale for the app). Adding a logical replication slot to it would:
-
-- Add continuous WAL streaming load on top of existing query load
-- Risk slot lag accumulation if Redpanda Connect falls behind, which forces Postgres to retain WAL — potentially filling disk
-- Create contention for RAM between the replication buffer and the shared_buffers/work_mem needed for query execution
-- Violate the "dedicated infra" contract — the read replica team has its own SLAs
-
-**A dedicated CDC replica is required.**
-
----
-
-### Sizing the CDC Replica
-
-The correct sizing metric is **WAL generation rate**, not database size. A 120GB database with light write traffic generates far less WAL than a 10GB database with heavy OLTP writes.
-
-#### Measure WAL generation rate
-
-```sql
--- Run twice, 60 seconds apart. Difference ÷ 60 = MB/s
-SELECT pg_current_wal_lsn();
-```
-
-Or monitor CloudWatch: `TransactionLogsDiskUsage` growth rate over time.
-
-#### Instance sizing table
-
-| WAL Rate | Recommended Instance | RAM | Notes |
-|---|---|---|---|
-| < 1 MB/s | `db.t4g.medium` | 4 GB | Light write workload only |
-| 1–10 MB/s | `db.r6g.large` | 16 GB | **Minimum for 120 GB database** |
-| 10–50 MB/s | `db.r6g.xlarge` | 32 GB | Heavy OLTP |
-| 50 MB/s+ | `db.r6g.2xlarge` | 64 GB | High-throughput workload |
-
-**For a 120 GB database: `db.r6g.large` (16 GB RAM) is the minimum regardless of WAL rate.**
-RAM headroom matters because Postgres buffers WAL in memory before the replication client reads it. Undersized instances risk OOM or slot lag accumulation.
-
-#### What the CDC replica actually does
-
-- Accepts WAL stream from primary (streaming replication — same as any read replica)
-- Holds one logical replication slot for Redpanda Connect
-- Runs no application queries — pure CDC workload
-- CPU stays near idle; memory is the critical resource
-
-#### Storage
-
-Match the primary's storage for safety. Enable RDS storage autoscaling with a max ceiling. WAL accumulation from a lagging slot is the primary disk risk — mitigated by `max_slot_wal_keep_size` (see Section 7).
+Only if the primary is consistently above 70% CPU utilization, or WAL rate exceeds 50 MB/s. At that point a `db.r6g.large` replica (~$175/month) isolates all CDC risk from production traffic.
 
 ---
 
@@ -409,15 +366,13 @@ Match the primary's storage for safety. Enable RDS storage autoscaling with a ma
 
 | Component | Our Stack | Debezium + MSK | Fivetran + Debezium |
 |---|---|---|---|
-| CDC replica (`db.r6g.large`) | ~$175/mo | ~$175/mo | ~$175/mo |
 | CDC / stream processor | ~$5–10/mo (Redpanda Connect) | ~$600–850/mo (MSK) | ~$30–40/mo (Debezium Server) |
 | Audit log ingestion | ~$0–5/mo (Snowpipe) | ~$0–5/mo (Snowpipe) | $500–2000+/mo (Fivetran) |
 | Redis Stack | ~$15–30/mo (ElastiCache or self-hosted) | Same | Same |
-| **Total (streaming infra)** | **~$195–220/mo** | **~$795–1065/mo** | **~$705–2215/mo** |
+| **Total (streaming infra)** | **~$20–45/mo** | **~$620–890/mo** | **~$530–2040/mo** |
+| *(Optional) dedicated CDC replica* | *+~$175/mo if primary > 70% CPU* | Same | Same |
 
-The CDC replica is a fixed cost shared across all three architectures. The streaming processor and ingestion costs are where the stacks diverge significantly.
-
-Postgres RDS with `wal_level = logical`: set on the CDC replica's parameter group only — no changes to the primary or existing read replica.
+Postgres RDS with `wal_level = logical`: set on the **primary's** parameter group. Requires a reboot. The read replica's parameter group is not changed.
 
 ---
 
@@ -425,9 +380,8 @@ Postgres RDS with `wal_level = logical`: set on the CDC replica's parameter grou
 
 | Component | Local Docker | Production |
 |---|---|---|
-| Postgres | `postgres:16-alpine` | RDS PostgreSQL (primary) |
-| Read Replica | Same container (not used for CDC) | RDS Read Replica — dedicated infra, untouched |
-| CDC Replica | Same container (separate logical slot) | RDS Read Replica — dedicated, `db.r6g.large` min |
+| Postgres | `postgres:16-alpine` | RDS PostgreSQL primary (replication slot here) |
+| Read Replica | Not used for CDC | RDS Read Replica — dedicated infra, untouched by CDC |
 | Redis Stack | `redis/redis-stack:latest` | ElastiCache + Redis Stack or self-hosted |
 | Redpanda Connect | `ghcr.io/redpandadata/connect` | ECS Fargate |
 | S3 staging | MinIO (already running) | AWS S3 |
@@ -436,14 +390,14 @@ Postgres RDS with `wal_level = logical`: set on the CDC replica's parameter grou
 
 **Required Postgres config for CDC**
 
-Apply to the **CDC replica's parameter group only**. Do not change the primary or the existing read replica.
+Apply to the **primary's parameter group**. The read replica's parameter group is not changed.
 
 ```sql
--- CDC replica RDS parameter group only
+-- Primary RDS parameter group
 wal_level = logical
 ```
 
-Requires a reboot of the CDC replica instance. No changes to the primary or the existing read replica's parameter groups.
+Requires a primary reboot (schedule during a maintenance window). No changes to the read replica.
 
 **Replication slot health**
 
