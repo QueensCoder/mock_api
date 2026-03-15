@@ -18,6 +18,11 @@ import os
 
 import redis.asyncio as aioredis
 
+from worker.tasks.composite_index import (
+    delete_pet_from_index,
+    index_pet_composite,
+    reindex_owner_pets,
+)
 from worker.tasks.search_index import delete_document, index_document
 
 logger = logging.getLogger(__name__)
@@ -51,7 +56,15 @@ async def handle_event(event: dict) -> None:
         logger.warning("Skipping malformed CDC event: %r", event)
         return
 
-    if op == "delete":
+    if table == "pets":
+        if op == "delete":
+            delete_pet_from_index.delay(int(doc_id))
+        else:
+            index_pet_composite.delay(int(doc_id))
+    elif table == "owners":
+        # Owner changed — re-index all their pets so composite docs stay fresh
+        reindex_owner_pets.delay(int(doc_id))
+    elif op == "delete":
         delete_document.delay(table, doc_id)
     else:
         index_document.delay(table, doc_id, event.get("data", {}))

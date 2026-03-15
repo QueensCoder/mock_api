@@ -15,13 +15,15 @@ input:
     tables:
       - public.items
       - public.projects
+      - public.owners
+      - public.pets
 
 pipeline:
   processors:
     # Normalise CDC event into a flat envelope:
     #   { op, table, id, data }
     # op:    "read" | "insert" | "update" | "delete"
-    # table: "items" | "projects"  (schema prefix stripped)
+    # table: "items" | "projects" | "owners" | "pets"  (schema prefix stripped)
     # id:    UUID string of the affected row
     # data:  full row dict (empty for deletes)
     - mapping: |
