@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     pet_search,
     pets,
     users,
+    visits,
 )
 
 api_router = APIRouter()
@@ -23,3 +24,4 @@ api_router.include_router(pets.router, prefix="/pets", tags=["pets"])
 api_router.include_router(patients.router, prefix="/patients", tags=["patients"])
 api_router.include_router(medicines.router, prefix="/medicines", tags=["medicines"])
 api_router.include_router(pet_search.router, prefix="/search", tags=["search"])
+api_router.include_router(visits.router, prefix="/visits", tags=["visits"])
