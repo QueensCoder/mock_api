@@ -1,0 +1,44 @@
+# Redpanda Connect CDC pipeline
+# Reads WAL from Postgres and fans out to Redis Streams (search index)
+#
+# On first start: snapshot_mode=initial reads all existing rows as "read" events,
+# then switches to streaming new changes.
+#
+# The replication slot (redpanda_cdc_slot) is created automatically on first run.
+# Monitor slot lag with: SELECT slot_name, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) FROM pg_replication_slots;
+
+input:
+  postgres_cdc:
+    dsn: postgres://postgres:postgres@postgres:5432/app
+    slot_name: redpanda_cdc_slot
+    snapshot_mode: initial
+    tables:
+      - public.items
+      - public.projects
+
+pipeline:
+  processors:
+    # Normalise CDC event into a flat envelope:
+    #   { op, table, id, data }
+    # op:    "read" | "insert" | "update" | "delete"
+    # table: "items" | "projects"  (schema prefix stripped)
+    # id:    UUID string of the affected row
+    # data:  full row dict (empty for deletes)
+    - mapping: |
+        let op  = this.operation
+        let tbl = this.table.split(".").index(-1)
+        let row = if $op == "delete" { this.before } else { this.after }
+
+        root.op    = $op
+        root.table = $tbl
+        root.id    = $row.id.string()
+        root.data  = if $op == "delete" { {} } else { $row }
+
+output:
+  redis_streams:
+    url: redis://redis:6379
+    stream: "cdc:events"
+    body_key: payload
+    # Cap the stream at 50 000 entries so it does not grow unbounded.
+    # Acknowledged messages are trimmed automatically.
+    max_length: 50000

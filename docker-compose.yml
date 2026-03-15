@@ -38,6 +38,24 @@ services:
         condition: service_healthy
     command: celery -A worker.celery_app worker --loglevel=info
 
+  stream_consumer:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: stream_consumer
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./worker:/app/worker
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery_worker:
+        condition: service_started
+    command: python -m worker.stream_consumer
+    restart: on-failure
+
   postgres:
     image: postgres:16-alpine
     container_name: postgres
@@ -47,6 +65,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-app}
+    # Enable logical replication for CDC.
+    # max_slot_wal_keep_size caps WAL retained per slot to 1 GB —
+    # protects disk if Redpanda Connect falls behind.
+    command: >
+      postgres
+        -c wal_level=logical
+        -c max_replication_slots=4
+        -c max_wal_senders=4
+        -c max_slot_wal_keep_size=1024
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -56,10 +83,14 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    # Redis Stack adds RediSearch + RedisJSON on top of plain Redis.
+    # API is 100% compatible — same port 6379, same redis-py client.
+    # RedisInsight UI available on port 8001.
+    image: redis/redis-stack:latest
     container_name: redis
     ports:
       - "6379:6379"
+      - "8001:8001"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -67,6 +98,22 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  redpanda_connect:
+    image: ghcr.io/redpandadata/connect:latest
+    container_name: redpanda_connect
+    volumes:
+      - ./redpanda/pipeline.yaml:/pipeline.yaml:ro
+    command: run /pipeline.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    environment:
+      # Surface Redpanda Connect logs at info level
+      CONNECT_LOG_LEVEL: INFO
 
   minio:
     image: minio/minio:latest

@@ -5,13 +5,15 @@ from fastapi import FastAPI
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.services.redis import close_redis, get_redis
+from app.services.search import ensure_indexes
 from app.services.storage import ensure_bucket_exists
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await get_redis()
+    redis = await get_redis()
+    await ensure_indexes(redis)
     ensure_bucket_exists()
     yield
     # Shutdown

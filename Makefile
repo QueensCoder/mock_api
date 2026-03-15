@@ -1,7 +1,9 @@
-.PHONY: help build up up-detach down restart logs logs-app logs-worker shell \
+.PHONY: help build up up-detach down restart logs logs-app logs-worker logs-cdc shell \
         worker-shell worker-inspect worker-purge \
-        test test-cov migrate migrate-auto migrate-down migrate-history \
-        format lint minio-setup setup clean lock sync
+        test test-cov test-search \
+        migrate migrate-auto migrate-down migrate-history \
+        format lint minio-setup setup clean lock sync \
+        search-reindex redis-insight
 
 # Default target
 help:
@@ -16,6 +18,7 @@ help:
 	@echo "    make logs          Tail all service logs"
 	@echo "    make logs-app      Tail app logs only"
 	@echo "    make logs-worker   Tail celery worker logs"
+	@echo "    make logs-cdc      Tail Redpanda Connect + stream consumer logs"
 	@echo "    make shell         Open shell in app container"
 	@echo "    make worker-shell  Open shell in celery worker container"
 	@echo "    make worker-inspect  Inspect active celery tasks"
@@ -35,10 +38,17 @@ help:
 	@echo "  Testing"
 	@echo "    make test          Run tests"
 	@echo "    make test-cov      Run tests with HTML coverage report"
+	@echo "    make test-search   Run search + CDC pipeline integration tests"
 	@echo ""
 	@echo "  Code quality"
 	@echo "    make format        Format code with ruff"
 	@echo "    make lint          Lint code with ruff"
+	@echo ""
+	@echo "  Search / CDC"
+	@echo "    make test-search   Run search + CDC pipeline integration tests"
+	@echo "    make redis-insight Open RedisInsight UI in browser (port 8001)"
+	@echo "    make search-reindex  Drop + recreate RediSearch indexes"
+	@echo "    make logs-cdc      Tail Redpanda Connect + stream consumer logs"
 	@echo ""
 	@echo "  Misc"
 	@echo "    make minio-setup   Create default MinIO bucket"
@@ -70,6 +80,9 @@ logs-app:
 
 logs-worker:
 	docker compose logs -f celery_worker
+
+logs-cdc:
+	docker compose logs -f redpanda_connect stream_consumer
 
 shell:
 	docker compose exec app /bin/bash
@@ -118,6 +131,10 @@ test:
 test-cov:
 	docker compose exec app uv run pytest tests/ -v --cov=app --cov-report=html
 
+# Run only the search + CDC pipeline integration tests (requires Redis Stack)
+test-search:
+	docker compose exec app uv run pytest tests/integration/test_search_service.py tests/integration/test_cdc_pipeline.py -v
+
 # ── Code quality ──────────────────────────────────────────────────────────────
 
 format:
@@ -125,6 +142,24 @@ format:
 
 lint:
 	uv run ruff check app/ worker/ tests/
+
+# ── Search / CDC ──────────────────────────────────────────────────────────────
+
+# Open RedisInsight UI (Redis Stack visualiser) in the default browser
+redis-insight:
+	open http://localhost:8001
+
+# Drop and recreate all RediSearch indexes (triggers a fresh snapshot from Redpanda Connect)
+search-reindex:
+	docker compose exec app uv run python -c "\
+	import asyncio; \
+	from redis.asyncio import Redis; \
+	from app.services.search import ITEM_INDEX, PROJECT_INDEX; \
+	async def drop(): \
+	    r = Redis.from_url('redis://redis:6379/0', decode_responses=True); \
+	    [await r.ft(i).dropindex(delete_documents=False) for i in (ITEM_INDEX, PROJECT_INDEX)]; \
+	    print('Indexes dropped — Redpanda Connect will repopulate on next restart'); \
+	asyncio.run(drop())"
 
 # ── MinIO ─────────────────────────────────────────────────────────────────────
 
