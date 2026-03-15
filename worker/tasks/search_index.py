@@ -20,9 +20,13 @@ _TABLE_PREFIX: dict[str, str] = {
     "projects": "project",
 }
 
+# Module-level connection pool — shared across all tasks in this worker process.
+# redis-py's ConnectionPool is thread-safe and reuses connections automatically.
+_pool = redis_sync.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=True)
+
 
 def _redis() -> redis_sync.Redis:
-    return redis_sync.from_url(settings.REDIS_URL, decode_responses=True)
+    return redis_sync.Redis(connection_pool=_pool)
 
 
 @celery.task(name="search.index_document", bind=True, max_retries=3, default_retry_delay=5)
