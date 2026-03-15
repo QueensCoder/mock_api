@@ -1,16 +1,40 @@
 """
 Integration tests for auth-protected routes.
 
-All tests run against the real FastAPI app (via ASGI transport) with the
-Stytch client dependency overridden — no real Stytch network calls are made.
+These tests run against the real FastAPI app via ASGI transport.
+No database connection is required — auth routes only call Stytch,
+which is mocked via dependency_overrides.
 """
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from app.core.auth import get_stytch_client
 from app.main import app
 from tests.conftest import make_stytch_client, make_stytch_error, make_stytch_response
+
+
+# ── fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def client() -> AsyncClient:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def authed_client() -> AsyncClient:
+    stytch_mock = make_stytch_client(response=make_stytch_response())
+    app.dependency_overrides[get_stytch_client] = lambda: stytch_mock
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": "Bearer valid-session-token"},
+    ) as c:
+        yield c
+    app.dependency_overrides.clear()
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
