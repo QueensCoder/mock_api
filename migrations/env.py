@@ -1,4 +1,5 @@
 import asyncio
+import re
 from logging.config import fileConfig
 
 from alembic import context
@@ -19,12 +20,24 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Partition child tables (e.g. audit_log_2026_01, visits_2026) are created by
+# raw SQL in migrations and must not appear in autogenerate diffs.
+_PARTITION_CHILD_RE = re.compile(r".+_\d{4}(_\d{2})?$")
+
+
+def include_object(object, name, type_, reflected, compare_to):  # noqa: A002
+    """Return False for reflected partition child tables."""
+    if type_ == "table" and reflected and _PARTITION_CHILD_RE.match(name):
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -36,6 +49,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_object=include_object,
         # Detect column type changes (e.g. String(50) → String(100))
         compare_type=True,
         # Surface server_default differences — always review the output since
