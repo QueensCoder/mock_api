@@ -13,8 +13,8 @@ help:
 	@echo ""
 	@echo "  Docker"
 	@echo "    make build         Build docker images"
-	@echo "    make up            Start all services (foreground)"
-	@echo "    make up-detach     Start all services (background)"
+	@echo "    make up            Start all services (detached)"
+	@echo "    make up-detach     Start all services (detached, alias)"
 	@echo "    make down          Stop and remove containers"
 	@echo "    make restart       Restart all services"
 	@echo "    make logs          Tail all service logs"
@@ -76,7 +76,7 @@ build:
 	docker compose build
 
 up:
-	docker compose up
+	docker compose up -d
 
 up-detach:
 	docker compose up -d
