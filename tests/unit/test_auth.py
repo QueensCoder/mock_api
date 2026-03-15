@@ -31,9 +31,7 @@ class TestVerifyStytchSession:
 
         await verify_stytch_session("my-session-token", client)
 
-        client.sessions.authenticate_async.assert_called_once_with(
-            session_token="my-session-token"
-        )
+        client.sessions.authenticate_async.assert_called_once_with(session_token="my-session-token")
 
     async def test_expired_session_raises_token_expired_error(self):
         error = make_stytch_error(status_code=401, error_type="session_expired")

@@ -149,6 +149,23 @@ services:
       # Surface Redpanda Connect logs at info level
       CONNECT_LOG_LEVEL: INFO
 
+  migrate:
+    build:
+      context: .
+      dockerfile: migrations/Dockerfile
+    container_name: migrate
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No restart — runs once and exits.
+    # Usage:  docker compose run --rm migrate
+    #         docker compose run --rm migrate alembic downgrade -1
+    profiles:
+      - tools
+
   minio:
     image: minio/minio:latest
     container_name: minio

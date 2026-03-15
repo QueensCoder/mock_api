@@ -1,8 +1,10 @@
 .PHONY: help build up up-detach down restart logs logs-app logs-worker logs-cdc logs-flower logs-nginx flower shell \
         worker-shell worker-inspect worker-purge \
         test test-cov test-search \
-        migrate migrate-auto migrate-down migrate-history \
-        format lint minio-setup setup clean lock sync \
+        migrate migrate-auto migrate-down migrate-history migrate-build \
+        format lint \
+        pre-commit-install pre-commit-run pre-commit-update \
+        minio-setup setup clean lock sync \
         search-reindex redis-insight
 
 # Default target
@@ -32,11 +34,17 @@ help:
 	@echo "    make sync          Sync venv from lockfile (including dev deps)"
 	@echo "    make add PKG=foo   Add a dependency (e.g. make add PKG=httpx)"
 	@echo ""
-	@echo "  Database"
-	@echo "    make migrate       Run alembic upgrade head"
+	@echo "  Database (dedicated migration container)"
+	@echo "    make migrate             Run alembic upgrade head"
 	@echo "    make migrate-auto MSG='desc'  Autogenerate a migration"
-	@echo "    make migrate-down  Downgrade last migration"
-	@echo "    make migrate-history  Show migration history"
+	@echo "    make migrate-down        Downgrade last migration"
+	@echo "    make migrate-history     Show migration history"
+	@echo "    make migrate-build       Rebuild the migration image"
+	@echo ""
+	@echo "  Pre-commit (runs on host, not in Docker)"
+	@echo "    make pre-commit-install  Install pre-commit hooks via uv (once per clone)"
+	@echo "    make pre-commit-run      Run all hooks against every file"
+	@echo "    make pre-commit-update   Bump hook versions in .pre-commit-config.yaml"
 	@echo ""
 	@echo "  Testing"
 	@echo "    make test          Run tests"
@@ -124,20 +132,25 @@ add:
 	@test -n "$(PKG)" || (echo "Error: PKG is required. Usage: make add PKG=package-name" && exit 1)
 	uv add $(PKG)
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# ── Database (dedicated migration container) ───────────────────────────────────
+# Runs alembic in a stripped-down image — no FastAPI/Redis/Celery.
+# Postgres must be running: make up-detach first.
 
 migrate:
-	docker compose exec app alembic upgrade head
+	docker compose run --rm migrate
 
 migrate-auto:
 	@test -n "$(MSG)" || (echo "Error: MSG is required. Usage: make migrate-auto MSG='your message'" && exit 1)
-	docker compose exec app alembic revision --autogenerate -m "$(MSG)"
+	docker compose run --rm migrate alembic revision --autogenerate -m "$(MSG)"
 
 migrate-down:
-	docker compose exec app alembic downgrade -1
+	docker compose run --rm migrate alembic downgrade -1
 
 migrate-history:
-	docker compose exec app alembic history
+	docker compose run --rm migrate alembic history
+
+migrate-build:
+	docker compose build migrate
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 
@@ -158,6 +171,17 @@ format:
 
 lint:
 	uv run ruff check app/ worker/ tests/
+
+# ── Pre-commit ─────────────────────────────────────────────────────────────────
+
+pre-commit-install:
+	uv add --dev pre-commit && pre-commit install
+
+pre-commit-run:
+	pre-commit run --all-files
+
+pre-commit-update:
+	pre-commit autoupdate
 
 # ── Search / CDC ──────────────────────────────────────────────────────────────
 

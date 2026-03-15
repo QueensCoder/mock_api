@@ -13,7 +13,6 @@ from app.core.auth import get_stytch_client
 from app.main import app
 from tests.conftest import make_stytch_client, make_stytch_error, make_stytch_response
 
-
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 

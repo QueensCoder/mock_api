@@ -37,5 +37,7 @@ async def verify_session(user: StytchUser = Depends(get_current_user)):
         "session_id": user.session_id,
         "email": user.email,
         "full_name": user.full_name,
-        "session_expires_at": user.session_expires_at.isoformat() if user.session_expires_at else None,
+        "session_expires_at": user.session_expires_at.isoformat()
+        if user.session_expires_at
+        else None,
     }

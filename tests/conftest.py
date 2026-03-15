@@ -4,16 +4,14 @@ DB fixtures live in tests/integration/conftest.py so unit tests
 don't require a running postgres.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 from stytch.core.response_base import StytchError, StytchErrorDetails
 
 from app.core.auth import get_stytch_client
 from app.main import app
-
 
 # ── Stytch error factory ──────────────────────────────────────────────────────
 
@@ -63,7 +61,7 @@ def make_stytch_response(
 
     session = MagicMock()
     session.session_id = session_id
-    session.expires_at = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    session.expires_at = datetime(2030, 1, 1, tzinfo=UTC)
 
     resp = MagicMock()
     resp.user = user

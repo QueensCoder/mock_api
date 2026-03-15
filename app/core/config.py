@@ -18,10 +18,10 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
 
     # Database connection pool
-    DB_POOL_SIZE: int = 10          # persistent connections per process
-    DB_MAX_OVERFLOW: int = 20       # extra connections allowed under burst
-    DB_POOL_TIMEOUT: int = 30       # seconds to wait for a connection
-    DB_POOL_RECYCLE: int = 1800     # recycle connections after 30 min (avoids stale TCP)
+    DB_POOL_SIZE: int = 10  # persistent connections per process
+    DB_MAX_OVERFLOW: int = 20  # extra connections allowed under burst
+    DB_POOL_TIMEOUT: int = 30  # seconds to wait for a connection
+    DB_POOL_RECYCLE: int = 1800  # recycle connections after 30 min (avoids stale TCP)
 
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
