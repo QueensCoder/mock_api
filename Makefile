@@ -1,4 +1,4 @@
-.PHONY: help build up up-detach down restart logs logs-app logs-worker logs-cdc shell \
+.PHONY: help build up up-detach down restart logs logs-app logs-worker logs-cdc logs-flower flower shell \
         worker-shell worker-inspect worker-purge \
         test test-cov test-search \
         migrate migrate-auto migrate-down migrate-history \
@@ -19,6 +19,8 @@ help:
 	@echo "    make logs-app      Tail app logs only"
 	@echo "    make logs-worker   Tail celery worker logs"
 	@echo "    make logs-cdc      Tail Redpanda Connect + stream consumer logs"
+	@echo "    make logs-flower   Tail Flower logs"
+	@echo "    make flower        Open Flower UI in browser (port 5555)"
 	@echo "    make shell         Open shell in app container"
 	@echo "    make worker-shell  Open shell in celery worker container"
 	@echo "    make worker-inspect  Inspect active celery tasks"
@@ -83,6 +85,12 @@ logs-worker:
 
 logs-cdc:
 	docker compose logs -f redpanda_connect stream_consumer
+
+logs-flower:
+	docker compose logs -f flower
+
+flower:
+	open http://localhost:5555
 
 shell:
 	docker compose exec app /bin/bash

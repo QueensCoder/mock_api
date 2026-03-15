@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git:*)",
       "Bash(pip install:*)",
-      "Bash(uv run:*)"
+      "Bash(uv run:*)",
+      "Bash(uv add:*)"
     ]
   }
 }
