@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from scalar_fastapi import get_scalar_api_reference
 
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -25,6 +27,17 @@ app = FastAPI(
     version="0.1.0",
     debug=settings.DEBUG,
     lifespan=lifespan,
+    # Disable built-in Swagger UI — Scalar replaces it at /docs
+    docs_url=None,
+    redoc_url=None,
 )
 
 app.include_router(api_router, prefix="/api/v1")
+
+
+@app.get("/docs", include_in_schema=False)
+async def scalar_docs() -> HTMLResponse:
+    return get_scalar_api_reference(
+        openapi_url="/openapi.json",
+        title=app.title,
+    )
