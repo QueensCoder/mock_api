@@ -167,6 +167,11 @@ migrate-build:
 #   - Supports parallel restore (-j N)
 #   - Supports selective restore (single table, single schema)
 #
+# Restore uses 3 phases for maximum performance:
+#   1. pre-data  — schema (tables, types, sequences); no indexes yet
+#   2. data      — rows loaded in parallel (-j 4); no index overhead
+#   3. post-data — indexes, constraints, triggers built in parallel
+#
 # Files are stored at: s3://<S3_BUCKET_NAME>/dumps/backup-YYYYMMDD-HHMMSS.dump
 
 _mc_setup = mc alias set minio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD --quiet
@@ -181,14 +186,27 @@ db-dump:
 	  echo "✓ Saved to s3://$$S3_BUCKET_NAME/dumps/$$DUMP"'
 
 # Usage: make db-restore DUMP=backup-20260315-120000.dump
+# Parallel workers (-j 4) apply to data + post-data phases.
+# Increase J= for larger machines: make db-restore DUMP=... J=8
+J ?= 4
 db-restore:
 	@test -n "$(DUMP)" || (echo "Usage: make db-restore DUMP=backup-YYYYMMDD-HHMMSS.dump" && exit 1)
-	@echo "Restoring $(DUMP) from MinIO..."
+	@echo "Restoring $(DUMP) from MinIO (3-phase, -j $(J))..."
 	@docker compose run --rm migrate sh -c '\
 	  $(_mc_setup) && \
 	  PG_URL=$$(echo $$DATABASE_URL | sed "s|postgresql+asyncpg://|postgresql://|") && \
-	  mc cat minio/$$S3_BUCKET_NAME/dumps/$(DUMP) | \
-	  pg_restore --dbname="$$PG_URL" --clean --if-exists --no-owner && \
+	  TMP=/tmp/restore.dump && \
+	  echo "  → downloading from MinIO..." && \
+	  mc cat minio/$$S3_BUCKET_NAME/dumps/$(DUMP) > $$TMP && \
+	  echo "  → dropping and recreating public schema..." && \
+	  psql "$$PG_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" && \
+	  echo "  → phase 1/3: pre-data (schema)" && \
+	  pg_restore --section=pre-data  --dbname="$$PG_URL" --no-owner $$TMP && \
+	  echo "  → phase 2/3: data (parallel -j $(J))" && \
+	  pg_restore --section=data      --dbname="$$PG_URL" --no-owner -j $(J) $$TMP && \
+	  echo "  → phase 3/3: post-data (indexes + constraints, parallel -j $(J))" && \
+	  pg_restore --section=post-data --dbname="$$PG_URL" --no-owner -j $(J) $$TMP && \
+	  rm $$TMP && \
 	  echo "✓ Restore complete"'
 
 db-list-dumps:

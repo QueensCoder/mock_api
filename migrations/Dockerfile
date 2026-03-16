@@ -2,12 +2,17 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# PostgreSQL client tools (pg_dump, psql, pg_restore) + tmux for interactive sessions.
-# postgresql-client installs the PG 15 clients — compatible with PG 16 servers.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    postgresql-client \
+# PostgreSQL 16 client tools (pg_dump, psql, pg_restore) pinned to match the server.
+# Using the official PostgreSQL apt repo so the client version matches exactly.
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] \
+      https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client-16 \
     tmux \
-    curl \
  && rm -rf /var/lib/apt/lists/*
 
 # MinIO client (mc) — used to stream dumps directly to/from MinIO.
