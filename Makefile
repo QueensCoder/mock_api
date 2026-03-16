@@ -2,6 +2,7 @@
         worker-shell worker-inspect worker-purge \
         test test-cov test-search \
         migrate migrate-auto migrate-down migrate-history migrate-build \
+        db-dump db-restore db-list-dumps \
         format lint \
         pre-commit-install pre-commit-run pre-commit-update \
         minio-setup setup clean lock sync \
@@ -33,6 +34,12 @@ help:
 	@echo "    make lock          Generate/update uv.lock"
 	@echo "    make sync          Sync venv from lockfile (including dev deps)"
 	@echo "    make add PKG=foo   Add a dependency (e.g. make add PKG=httpx)"
+	@echo ""
+	@echo "  Database (dedicated migration container)"
+	@echo "  Database dump / restore (custom format → MinIO)"
+	@echo "    make db-dump             pg_dump -Fc → MinIO (timestamped)"
+	@echo "    make db-restore DUMP=f   pg_restore from MinIO dump file"
+	@echo "    make db-list-dumps       List all dumps in MinIO"
 	@echo ""
 	@echo "  Database (dedicated migration container)"
 	@echo "    make migrate             Run alembic upgrade head"
@@ -151,6 +158,41 @@ migrate-history:
 
 migrate-build:
 	docker compose build migrate
+
+# ── Database dump / restore (custom format → MinIO) ───────────────────────────
+# Requires: make up (postgres + minio must be running)
+#
+# Dumps use pg_dump -Fc (PostgreSQL custom format):
+#   - Compressed, ~3-5x smaller than plain SQL
+#   - Supports parallel restore (-j N)
+#   - Supports selective restore (single table, single schema)
+#
+# Files are stored at: s3://<S3_BUCKET_NAME>/dumps/backup-YYYYMMDD-HHMMSS.dump
+
+_mc_setup = mc alias set minio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD --quiet
+
+db-dump:
+	@echo "Dumping database to MinIO..."
+	@docker compose run --rm migrate sh -c '\
+	  $(_mc_setup) && \
+	  DUMP=backup-$$(date +%Y%m%d-%H%M%S).dump && \
+	  pg_dump -Fc "$$DATABASE_URL" | mc pipe minio/$$S3_BUCKET_NAME/dumps/$$DUMP && \
+	  echo "✓ Saved to s3://$$S3_BUCKET_NAME/dumps/$$DUMP"'
+
+# Usage: make db-restore DUMP=backup-20260315-120000.dump
+db-restore:
+	@test -n "$(DUMP)" || (echo "Usage: make db-restore DUMP=backup-YYYYMMDD-HHMMSS.dump" && exit 1)
+	@echo "Restoring $(DUMP) from MinIO..."
+	@docker compose run --rm migrate sh -c '\
+	  $(_mc_setup) && \
+	  mc cat minio/$$S3_BUCKET_NAME/dumps/$(DUMP) | \
+	  pg_restore --dbname="$$DATABASE_URL" --clean --if-exists --no-owner && \
+	  echo "✓ Restore complete"'
+
+db-list-dumps:
+	@docker compose run --rm migrate sh -c '\
+	  $(_mc_setup) && \
+	  mc ls minio/$$S3_BUCKET_NAME/dumps/'
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 
