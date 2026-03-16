@@ -226,7 +226,12 @@ services:
   airflow-init:
     <<: *airflow-common
     container_name: airflow_init
-    command: /opt/airflow/scripts/airflow_init.sh
+    # Override the Airflow entrypoint so we can create the 'airflow' database
+    # before Airflow tries to connect to it. Without this, /entrypoint attempts
+    # to verify AIRFLOW__DATABASE__SQL_ALCHEMY_CONN on startup, hits a missing
+    # database, and loops indefinitely.
+    entrypoint: ["/bin/bash"]
+    command: ["/opt/airflow/scripts/airflow_init.sh"]
     depends_on:
       postgres:
         condition: service_healthy
