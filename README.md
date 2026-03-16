@@ -1,6 +1,6 @@
 # Backend
 
-FastAPI backend with PostgreSQL, Redis Stack, MinIO, Celery, and a CDC pipeline powered by Redpanda Connect.
+FastAPI backend with PostgreSQL, Redis Stack, MinIO, Celery, a CDC pipeline powered by Redpanda Connect, and an ETL pipeline using Apache Airflow with DuckDB (local Snowflake substitute).
 
 ## Stack
 
@@ -12,6 +12,8 @@ FastAPI backend with PostgreSQL, Redis Stack, MinIO, Celery, and a CDC pipeline 
 | Object storage | MinIO (S3-compatible) |
 | Task queue | Celery 5 + Redis broker |
 | CDC pipeline | Redpanda Connect → Redis Streams → Celery |
+| ETL orchestration | Apache Airflow 2.10 (CeleryExecutor) |
+| Analytics warehouse | DuckDB (local) → Snowflake (production) |
 | Auth | Stytch (session token verification) |
 | Reverse proxy | Nginx |
 | API docs | Scalar (at `/docs`) |
@@ -21,27 +23,35 @@ FastAPI backend with PostgreSQL, Redis Stack, MinIO, Celery, and a CDC pipeline 
 ## Architecture
 
 ```
-                         ┌─────────────────────────────────────┐
-  Frontend               │  Docker Compose (local)             │
-     │                   │                                     │
-     └──► nginx :80 ────►│  FastAPI :8000                      │
-                         │    │                                │
-                         │    ├── PostgreSQL :5432             │
-                         │    ├── Redis Stack :6379            │
-                         │    └── MinIO :9000                  │
-                         │                                     │
-                         │  CDC pipeline                       │
-                         │    Postgres WAL                     │
-                         │      └── Redpanda Connect           │
-                         │            └── Redis Streams        │
-                         │                  └── stream_consumer│
-                         │                        └── Celery   │
+                         ┌─────────────────────────────────────────────┐
+  Frontend               │  Docker Compose (local)                     │
+     │                   │                                             │
+     └──► nginx :80 ────►│  FastAPI :8000                              │
+                         │    │                                        │
+                         │    ├── PostgreSQL :5432                     │
+                         │    ├── Redis Stack :6379                    │
+                         │    └── MinIO :9000                          │
+                         │                                             │
+                         │  CDC pipeline                               │
+                         │    Postgres WAL                             │
+                         │      └── Redpanda Connect                   │
+                         │            └── Redis Streams                │
+                         │                  └── stream_consumer        │
+                         │                        └── Celery           │
                          │                              └── Redis Stack (search index)
-                         │                                     │
-                         │  Monitoring                         │
-                         │    Flower        :5555              │
-                         │    RedisInsight  :8001              │
-                         └─────────────────────────────────────┘
+                         │                                             │
+                         │  ETL pipeline (Airflow CeleryExecutor)      │
+                         │    Airflow scheduler  :—                    │
+                         │    Airflow webserver  :8080                 │
+                         │    Airflow worker                           │
+                         │      └── PostgreSQL (source)                │
+                         │            └── DuckDB analytics.duckdb      │
+                         │                  (swap → Snowflake in prod) │
+                         │                                             │
+                         │  Monitoring                                 │
+                         │    Flower        :5555                      │
+                         │    RedisInsight  :8001                      │
+                         └─────────────────────────────────────────────┘
 ```
 
 ## Quick start
@@ -64,6 +74,7 @@ Services start on:
 | API (via nginx) | http://localhost |
 | API docs (Scalar) | http://localhost/docs |
 | FastAPI (direct) | http://localhost:8000 |
+| Airflow UI | http://localhost:8080 |
 | Flower (Celery monitor) | http://localhost:5555 |
 | RedisInsight | http://localhost:8001 |
 | MinIO console | http://localhost:9001 |
@@ -98,6 +109,15 @@ make pre-commit-run     # run all pre-commit hooks against every file
 # Search
 make redis-insight      # open RedisInsight in browser
 make search-reindex     # drop and recreate RediSearch indexes
+
+# ETL / Airflow
+make etl-keygen         # generate a Fernet key for AIRFLOW_FERNET_KEY
+make etl-init           # create Airflow metadata DB + admin user (run once)
+make etl-up             # start Airflow webserver, scheduler, worker
+make etl-down           # stop Airflow services
+make etl-logs           # tail Airflow logs
+make etl-shell          # shell into the Airflow worker
+make airflow-ui         # open Airflow UI at http://localhost:8080
 ```
 
 ## Project layout
@@ -137,6 +157,14 @@ backend/
 │   ├── env.py
 │   └── versions/
 │       └── 0001_initial_schema.py
+├── etl/
+│   ├── Dockerfile            # Airflow 2.10 image + duckdb + postgres provider
+│   ├── scripts/
+│   │   └── airflow_init.sh   # one-shot: create DB, migrate, seed admin user
+│   ├── dags/
+│   │   ├── users_snapshot.py      # nightly users → analytics.users_snapshot
+│   │   └── visits_daily_rollup.py # daily visits aggregate → analytics.visits_daily_rollup
+│   └── plugins/              # custom Airflow operators/hooks (empty, extend here)
 ├── redpanda/
 │   └── pipeline.yaml         # CDC pipeline: Postgres WAL → Redis Streams
 ├── nginx/
@@ -155,6 +183,50 @@ backend/
 ├── Makefile
 ├── pyproject.toml
 └── .pre-commit-config.yaml
+```
+
+## ETL pipeline
+
+Apache Airflow orchestrates nightly ETL jobs that extract data from the operational PostgreSQL database and load it into a DuckDB analytics warehouse (a local Snowflake substitute with compatible SQL syntax).
+
+### First-time setup
+
+```bash
+# 1. Generate a Fernet key and add it to .env
+make etl-keygen          # copy the output into AIRFLOW_FERNET_KEY in .env
+
+# 2. Initialise the Airflow metadata DB + create admin user
+make etl-init
+
+# 3. Start the Airflow services
+make etl-up
+
+# 4. Open the UI (default credentials: admin / admin)
+make airflow-ui
+```
+
+### DAGs
+
+| DAG | Schedule | Source → Target |
+|---|---|---|
+| `users_daily_snapshot` | 02:00 UTC | `users` → `analytics.users_snapshot` (full reload) |
+| `visits_daily_rollup` | 03:00 UTC | `visits` → `analytics.visits_daily_rollup` (per-day aggregate) |
+
+### Swapping DuckDB for Snowflake (production)
+
+Each DAG's `_load` function contains a commented-out Snowflake block. To switch:
+1. Add `snowflake-connector-python` to `etl/Dockerfile`
+2. Set `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE` in `.env`
+3. Replace the DuckDB write block with the commented Snowflake block in each DAG
+
+### DuckDB analytics schema
+
+```sql
+-- Inspect the local analytics warehouse
+duckdb /path/to/analytics.duckdb
+
+SELECT * FROM analytics.users_snapshot LIMIT 10;
+SELECT * FROM analytics.visits_daily_rollup ORDER BY visit_date DESC;
 ```
 
 ## Database conventions
@@ -234,6 +306,11 @@ Copy `.env.example` to `.env` and fill in the Stytch keys. Everything else works
 | `DB_POOL_SIZE` | 10 | Postgres connection pool size per process |
 | `DB_MAX_OVERFLOW` | 20 | Extra connections allowed under burst |
 | `S3_BUCKET_NAME` | app-bucket | MinIO bucket name |
+| `AIRFLOW_FERNET_KEY` | — | Required for Airflow — generate with `make etl-keygen` |
+| `AIRFLOW_SECRET_KEY` | changeme-in-prod | Flask secret key for Airflow webserver |
+| `AIRFLOW_ADMIN_USER` | admin | Airflow UI login username |
+| `AIRFLOW_ADMIN_PASSWORD` | admin | Airflow UI login password |
+| `DUCKDB_PATH` | /opt/airflow/duckdb/analytics.duckdb | Path to the DuckDB analytics file |
 
 ## Pre-commit hooks
 

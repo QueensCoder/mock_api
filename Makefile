@@ -6,7 +6,8 @@
         format lint \
         pre-commit-install pre-commit-run pre-commit-update \
         minio-setup setup clean lock sync \
-        search-reindex redis-insight
+        search-reindex redis-insight \
+        etl-init etl-up etl-down etl-logs etl-shell airflow-ui etl-keygen
 
 # Default target
 help:
@@ -71,6 +72,15 @@ help:
 	@echo "  API docs"
 	@echo "    open http://localhost/docs     Scalar API docs (via nginx)"
 	@echo "    open http://localhost/openapi.json  Raw OpenAPI schema"
+	@echo ""
+	@echo "  ETL / Airflow"
+	@echo "    make etl-keygen    Generate a Fernet key for AIRFLOW_FERNET_KEY"
+	@echo "    make etl-init      Initialise Airflow metadata DB + admin user"
+	@echo "    make etl-up        Start Airflow webserver, scheduler, worker"
+	@echo "    make etl-down      Stop Airflow services"
+	@echo "    make etl-logs      Tail Airflow logs"
+	@echo "    make etl-shell     Open shell in Airflow worker"
+	@echo "    make airflow-ui    Open Airflow UI in browser (port 8080)"
 	@echo ""
 	@echo "  Misc"
 	@echo "    make minio-setup   Create default MinIO bucket"
@@ -268,6 +278,29 @@ search-reindex:
 minio-setup:
 	@source .env && docker compose exec minio mc alias set local http://localhost:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD
 	@source .env && docker compose exec minio mc mb local/$$S3_BUCKET_NAME --ignore-existing
+
+# ── ETL / Airflow ─────────────────────────────────────────────────────────────
+
+etl-keygen:
+	@python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+etl-init:
+	docker compose up airflow-init --no-deps
+
+etl-up:
+	docker compose up -d airflow-webserver airflow-scheduler airflow-worker
+
+etl-down:
+	docker compose stop airflow-webserver airflow-scheduler airflow-worker airflow-init
+
+etl-logs:
+	docker compose logs -f airflow-webserver airflow-scheduler airflow-worker
+
+etl-shell:
+	docker compose exec airflow-worker /bin/bash
+
+airflow-ui:
+	open http://localhost:8080
 
 # ── First-time setup ──────────────────────────────────────────────────────────
 
