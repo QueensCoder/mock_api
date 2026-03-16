@@ -11,7 +11,9 @@
       "Bash(docker compose:*)",
       "Bash(make db-dump:*)",
       "Bash(make db-list-dumps:*)",
-      "Bash(make db-restore:*)"
+      "Bash(make db-restore:*)",
+      "Bash(python3:*)",
+      "Bash(ls .env*:*)"
     ]
   }
 }
