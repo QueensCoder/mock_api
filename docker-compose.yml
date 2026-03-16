@@ -1,3 +1,30 @@
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: etl/Dockerfile
+  env_file:
+    - path: .env
+      required: false
+    - path: .env.local
+      required: false
+  environment:
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/1
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-changeme-in-prod}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    DUCKDB_PATH: /opt/airflow/duckdb/analytics.duckdb
+  volumes:
+    - ./etl/dags:/opt/airflow/dags
+    - ./etl/plugins:/opt/airflow/plugins
+    - airflow_logs:/opt/airflow/logs
+    - duckdb_data:/opt/airflow/duckdb
+
 services:
   nginx:
     image: nginx:alpine
@@ -191,7 +218,71 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Airflow ───────────────────────────────────────────────────────────────────
+  # CeleryExecutor backed by the existing Redis (DB 1) and PostgreSQL.
+  # airflow-init runs once to create the metadata DB, apply migrations, and
+  # seed the admin user. All other Airflow containers wait for it to finish.
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init
+    command: /opt/airflow/scripts/airflow_init.sh
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow_scheduler
+    command: scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow_worker
+    command: celery worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: on-failure
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  airflow_logs:
+  duckdb_data:
