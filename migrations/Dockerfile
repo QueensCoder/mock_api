@@ -2,6 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# PostgreSQL client tools (pg_dump, psql, pg_restore) + tmux for interactive sessions.
+# postgresql-client installs the PG 15 clients — compatible with PG 16 servers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    tmux \
+ && rm -rf /var/lib/apt/lists/*
+
 # Only the packages Alembic needs to connect to Postgres and read models.
 # No FastAPI, no Redis, no Celery, no Stytch — keeps the image small and fast.
 RUN pip install --no-cache-dir \
