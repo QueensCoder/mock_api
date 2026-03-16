@@ -176,7 +176,8 @@ db-dump:
 	@docker compose run --rm migrate sh -c '\
 	  $(_mc_setup) && \
 	  DUMP=backup-$$(date +%Y%m%d-%H%M%S).dump && \
-	  pg_dump -Fc "$$DATABASE_URL" | mc pipe minio/$$S3_BUCKET_NAME/dumps/$$DUMP && \
+	  PG_URL=$$(echo $$DATABASE_URL | sed "s|postgresql+asyncpg://|postgresql://|") && \
+	  pg_dump -Fc "$$PG_URL" | mc pipe minio/$$S3_BUCKET_NAME/dumps/$$DUMP && \
 	  echo "✓ Saved to s3://$$S3_BUCKET_NAME/dumps/$$DUMP"'
 
 # Usage: make db-restore DUMP=backup-20260315-120000.dump
@@ -185,8 +186,9 @@ db-restore:
 	@echo "Restoring $(DUMP) from MinIO..."
 	@docker compose run --rm migrate sh -c '\
 	  $(_mc_setup) && \
+	  PG_URL=$$(echo $$DATABASE_URL | sed "s|postgresql+asyncpg://|postgresql://|") && \
 	  mc cat minio/$$S3_BUCKET_NAME/dumps/$(DUMP) | \
-	  pg_restore --dbname="$$DATABASE_URL" --clean --if-exists --no-owner && \
+	  pg_restore --dbname="$$PG_URL" --clean --if-exists --no-owner && \
 	  echo "✓ Restore complete"'
 
 db-list-dumps:
