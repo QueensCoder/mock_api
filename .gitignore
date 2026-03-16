@@ -12,9 +12,9 @@ build/
 venv/
 env/
 
-# Environment
-.env
-*.env.local
+# Environment — block all .env* variants, then explicitly allow the example template
+.env*
+!.env.example
 
 # Testing
 .pytest_cache/
@@ -36,6 +36,3 @@ Thumbs.db
 
 # Alembic
 migrations/versions/*.pyc
-
-
-.env*
