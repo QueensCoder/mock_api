@@ -4,7 +4,14 @@
       "Bash(git:*)",
       "Bash(pip install:*)",
       "Bash(uv run:*)",
-      "Bash(uv add:*)"
+      "Bash(uv add:*)",
+      "Bash(do sed:*)",
+      "Bash(python:*)",
+      "Bash(docker pull:*)",
+      "Bash(docker compose:*)",
+      "Bash(make db-dump:*)",
+      "Bash(make db-list-dumps:*)",
+      "Bash(make db-restore:*)"
     ]
   }
 }
